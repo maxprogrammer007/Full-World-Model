@@ -12,7 +12,7 @@ class VisionModel(nn.Module):
         self.conv1 = nn.Conv2d(3, 32, kernel_size=8, stride=4)
         self.conv2 = nn.Conv2d(32, 64, kernel_size=4, stride=2)
         self.conv3 = nn.Conv2d(64, 64, kernel_size=3, stride=1)
-        self.fc = nn.Linear(64 * 7 * 7, 256)
+        self.fc = nn.Linear(4096, 256)
 
     def forward(self, x):
         x = F.relu(self.conv1(x))
@@ -49,7 +49,7 @@ def preprocess_state(state, device):
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Create environment with video recording enabled
-env = gym.make('CarRacing-v2', render_mode='rgb_array')  # enable rendering
+env = gym.make('CarRacing-v3', render_mode='rgb_array')  # enable rendering
 env = wrappers.RecordVideo(
     env,
     video_folder='./videos',              # Save videos in ./videos folder
@@ -63,7 +63,7 @@ memory_model = MemoryModel().to(device)
 controller = Controller().to(device)
 
 # Load checkpoint
-checkpoint = torch.load('world_model_checkpoint_500.pth', map_location=device)
+checkpoint = torch.load('world_model_checkpoint_250.pth', map_location=device)
 vision_model.load_state_dict(checkpoint['vision_model'])
 memory_model.load_state_dict(checkpoint['memory_model'])
 controller.load_state_dict(checkpoint['controller'])
