@@ -4,6 +4,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 import os
+import matplotlib.pyplot as plt
+from collections import deque
 
 # Enable anomaly detection
 torch.autograd.set_detect_anomaly(True)
@@ -72,6 +74,13 @@ controller_optimizer = optim.Adam(controller.parameters(), lr=learning_rate)
 
 mse_loss = nn.MSELoss()
 
+# For tracking
+rewards = []
+best_reward = float('-inf')
+best_model_path = "checkpoints/best_model.pth"
+recent_rewards = deque(maxlen=50)
+early_stopping_threshold = -30  # stop if average of last 50 episodes exceeds this
+
 # Training Loop
 for episode in range(num_episodes):
     state, _ = env.reset()
@@ -101,15 +110,16 @@ for episode in range(num_episodes):
             target_latent = vision_model(next_state_tensor)
 
         # Normalize reward for stability
-        reward /= 100.0
+        reward_tensor = torch.tensor(reward / 100.0, dtype=torch.float32, device=device)
 
         prediction_loss = mse_loss(memory_output, target_latent.detach())
-        reward_loss = -reward
-        loss = prediction_loss + 2.0 * reward_loss  # Amplified reward signal
+        reward_loss = -reward_tensor
+        loss = prediction_loss + 5.0 * reward_loss
 
         vision_optimizer.zero_grad()
         memory_optimizer.zero_grad()
         controller_optimizer.zero_grad()
+        
         loss.backward()
 
         # Clip gradients
@@ -122,15 +132,28 @@ for episode in range(num_episodes):
         controller_optimizer.step()
 
         state = next_state
-        episode_reward += reward * 100  # revert normalized reward for logging
+        episode_reward += reward
         total_loss += loss.item()
 
         if done or truncated:
             break
 
-    print(f"Ep {episode+1}, R: {episode_reward:.2f}, pred_loss: {prediction_loss.item():.2f}, reward_loss: {reward_loss:.2f}, total: {loss.item():.2f}, action_mean: {action.mean().item():.4f}")
+    rewards.append(episode_reward)
+    recent_rewards.append(episode_reward)
 
-    # Save checkpoint
+    # Track best model
+    if episode_reward > best_reward:
+        best_reward = episode_reward
+        torch.save({
+            'vision_model': vision_model.state_dict(),
+            'memory_model': memory_model.state_dict(),
+            'controller': controller.state_dict(),
+            'reward': best_reward
+        }, best_model_path)
+
+    print(f"Ep {episode+1}, R: {episode_reward:.2f}, pred_loss: {prediction_loss.item():.2f}, reward_loss: {reward_loss.item():.2f}, total: {loss.item():.2f}, action_mean: {action.mean().item():.4f}")
+
+    # Optional checkpoint
     if (episode + 1) % 50 == 0:
         torch.save({
             'vision_model': vision_model.state_dict(),
@@ -138,4 +161,18 @@ for episode in range(num_episodes):
             'controller': controller.state_dict()
         }, f"checkpoints/world_model_checkpoint_{episode+1}.pth")
 
+    # Early stopping
+    if len(recent_rewards) == 50 and sum(recent_rewards)/50 > early_stopping_threshold:
+        print("Early stopping: agent has learned to perform adequately.")
+        break
+
 env.close()
+
+# Plot reward curve
+plt.plot(rewards)
+plt.xlabel("Episode")
+plt.ylabel("Reward")
+plt.title("Training Reward Curve")
+plt.grid(True)
+plt.savefig("checkpoints/reward_curve.png")
+plt.show()

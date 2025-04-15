@@ -63,7 +63,7 @@ memory_model = MemoryModel().to(device)
 controller = Controller().to(device)
 
 # Load checkpoint
-checkpoint = torch.load('world_model_checkpoint_250.pth', map_location=device)
+checkpoint = torch.load('checkpoints/best_model.pth', map_location=device)
 vision_model.load_state_dict(checkpoint['vision_model'])
 memory_model.load_state_dict(checkpoint['memory_model'])
 controller.load_state_dict(checkpoint['controller'])
