@@ -1,10 +1,12 @@
 import gymnasium as gym
 import torch
-torch.autograd.set_detect_anomaly(True)
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 import os
+
+# Enable anomaly detection
+torch.autograd.set_detect_anomaly(True)
 
 # Hyperparameters
 vision_model_hidden_dim = 256
@@ -26,7 +28,7 @@ class VisionModel(nn.Module):
         self.conv1 = nn.Conv2d(3, 32, kernel_size=8, stride=4)
         self.conv2 = nn.Conv2d(32, 64, kernel_size=4, stride=2)
         self.conv3 = nn.Conv2d(64, 64, kernel_size=3, stride=1)
-        self.fc = nn.Linear(64 * 8 * 8, vision_model_hidden_dim)  # Matches expected flatten size
+        self.fc = nn.Linear(64 * 8 * 8, vision_model_hidden_dim)
 
     def forward(self, x):
         x = F.relu(self.conv1(x))
@@ -85,11 +87,11 @@ for episode in range(num_episodes):
         hidden_state = (hidden_state[0].detach(), hidden_state[1].detach())
         memory_output, hidden_state = memory_model(vision_output, hidden_state)
 
-        # Generate action + exploration noise
         action = controller(memory_output)
-        action += 0.05 * torch.randn_like(action)  # exploration noise
 
-        # Clip action to be within [-1, 1] range
+        # Add exploration noise that decays over time
+        noise_scale = max(0.1 * (1 - episode / num_episodes), 0.01)
+        action += noise_scale * torch.randn_like(action)
         action = torch.clamp(action, -1.0, 1.0)
 
         next_state, reward, done, truncated, _ = env.step(action.squeeze(0).cpu().detach().numpy())
@@ -98,31 +100,35 @@ for episode in range(num_episodes):
         with torch.no_grad():
             target_latent = vision_model(next_state_tensor)
 
-        # Normalize reward to keep loss magnitude reasonable
-        reward = reward / 100.0
+        # Normalize reward for stability
+        reward /= 100.0
 
         prediction_loss = mse_loss(memory_output, target_latent.detach())
-        reward_loss = -reward  # encourage higher rewards
-
-        # Combine losses
-        loss = prediction_loss + 0.05 * reward_loss
+        reward_loss = -reward
+        loss = prediction_loss + 2.0 * reward_loss  # Amplified reward signal
 
         vision_optimizer.zero_grad()
         memory_optimizer.zero_grad()
         controller_optimizer.zero_grad()
         loss.backward()
+
+        # Clip gradients
+        torch.nn.utils.clip_grad_norm_(vision_model.parameters(), 1.0)
+        torch.nn.utils.clip_grad_norm_(memory_model.parameters(), 1.0)
+        torch.nn.utils.clip_grad_norm_(controller.parameters(), 1.0)
+
         vision_optimizer.step()
         memory_optimizer.step()
         controller_optimizer.step()
 
         state = next_state
-        episode_reward += reward * 100  # revert to true scale
+        episode_reward += reward * 100  # revert normalized reward for logging
         total_loss += loss.item()
 
         if done or truncated:
             break
 
-    print(f"Episode {episode+1}/{num_episodes}, Reward: {episode_reward:.2f}, Loss: {total_loss:.4f}, Action Mean: {action.mean().item():.4f}")
+    print(f"Ep {episode+1}, R: {episode_reward:.2f}, pred_loss: {prediction_loss.item():.2f}, reward_loss: {reward_loss:.2f}, total: {loss.item():.2f}, action_mean: {action.mean().item():.4f}")
 
     # Save checkpoint
     if (episode + 1) % 50 == 0:
