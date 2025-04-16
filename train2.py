@@ -79,7 +79,7 @@ rewards = []
 best_reward = float('-inf')
 best_model_path = "checkpoints/best_model.pth"
 recent_rewards = deque(maxlen=50)
-early_stopping_threshold = -30  # stop if average of last 50 episodes exceeds this
+early_stopping_threshold = 200  # Goal: break early if model performs well consistently
 
 # Training Loop
 for episode in range(num_episodes):
@@ -97,8 +97,6 @@ for episode in range(num_episodes):
         memory_output, hidden_state = memory_model(vision_output, hidden_state)
 
         action = controller(memory_output)
-
-        # Add exploration noise that decays over time
         noise_scale = max(0.1 * (1 - episode / num_episodes), 0.01)
         action += noise_scale * torch.randn_like(action)
         action = torch.clamp(action, -1.0, 1.0)
@@ -109,20 +107,18 @@ for episode in range(num_episodes):
         with torch.no_grad():
             target_latent = vision_model(next_state_tensor)
 
-        # Normalize reward for stability
         reward_tensor = torch.tensor(reward / 100.0, dtype=torch.float32, device=device)
-
         prediction_loss = mse_loss(memory_output, target_latent.detach())
         reward_loss = -reward_tensor
-        loss = prediction_loss + 5.0 * reward_loss
+
+        # Scale down prediction loss, emphasize reward gradient
+        loss = 0.01 * prediction_loss + 5.0 * reward_loss
 
         vision_optimizer.zero_grad()
         memory_optimizer.zero_grad()
         controller_optimizer.zero_grad()
-        
         loss.backward()
 
-        # Clip gradients
         torch.nn.utils.clip_grad_norm_(vision_model.parameters(), 1.0)
         torch.nn.utils.clip_grad_norm_(memory_model.parameters(), 1.0)
         torch.nn.utils.clip_grad_norm_(controller.parameters(), 1.0)
@@ -141,7 +137,7 @@ for episode in range(num_episodes):
     rewards.append(episode_reward)
     recent_rewards.append(episode_reward)
 
-    # Track best model
+    # Save best-performing model
     if episode_reward > best_reward:
         best_reward = episode_reward
         torch.save({
@@ -153,7 +149,7 @@ for episode in range(num_episodes):
 
     print(f"Ep {episode+1}, R: {episode_reward:.2f}, pred_loss: {prediction_loss.item():.2f}, reward_loss: {reward_loss.item():.2f}, total: {loss.item():.2f}, action_mean: {action.mean().item():.4f}")
 
-    # Optional checkpoint
+    # Periodic checkpointing
     if (episode + 1) % 50 == 0:
         torch.save({
             'vision_model': vision_model.state_dict(),
@@ -161,9 +157,9 @@ for episode in range(num_episodes):
             'controller': controller.state_dict()
         }, f"checkpoints/world_model_checkpoint_{episode+1}.pth")
 
-    # Early stopping
+    # Early stopping if recent performance is strong
     if len(recent_rewards) == 50 and sum(recent_rewards)/50 > early_stopping_threshold:
-        print("Early stopping: agent has learned to perform adequately.")
+        print("Early stopping: agent has reached target reward.")
         break
 
 env.close()
